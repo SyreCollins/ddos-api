@@ -6,7 +6,7 @@ import time
 from fastapi import FastAPI, WebSocket, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
-import WSGIMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from pydantic import BaseModel
 from fake_useragent import UserAgent
@@ -31,7 +31,8 @@ security = HTTPBearer()
 
 # CORS Configuration
 app.add_middleware(
-    HTTPSRedirectMiddleware,
+    GZipMiddleware,
+    minimum_size=1000,
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
@@ -156,14 +157,12 @@ async def stats_websocket(websocket: WebSocket):
                 await websocket.send_json(manager.stats)
                 await asyncio.sleep(1)
 
-                data = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)
+                await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
             except asyncio.TimeoutError:
                 continue
-            except WebSocketDisconnect:
-                logger.info("Client disconnected")
+            except Exception as e:
+                logger.error(f"Websocket error: {str(e)}")
                 break
-    except Exception as e:
-        logger.error(f"Websocket error: {str(e)}")
     finally:
         await websocket.close()
 
