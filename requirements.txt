@@ -2,4 +2,4 @@ fastapi
 uvicorn[standard]
 aiohttp
 fake-useragent
-websockets
+websockets==12.0
