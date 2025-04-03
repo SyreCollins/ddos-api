@@ -1,4 +1,5 @@
 fastapi
-uvicorn
+uvicorn[standard]
 aiohttp
 fake-useragent
+websockets
