@@ -31,15 +31,13 @@ security = HTTPBearer()
 
 # CORS Configuration
 app.add_middleware(
-    GZipMiddleware,
-    minimum_size=1000,
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 # Models
 class AttackConfig(BaseModel):
     target_url: str
