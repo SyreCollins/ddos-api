@@ -6,6 +6,8 @@ import time
 from fastapi import FastAPI, WebSocket, HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+import WSGIMiddleware
+from fastapi.middleware.httpsredirect import HTTPSRedirectMiddleware
 from pydantic import BaseModel
 from fake_useragent import UserAgent
 from typing import Dict, Optional
@@ -29,6 +31,7 @@ security = HTTPBearer()
 
 # CORS Configuration
 app.add_middleware(
+    HTTPSRedirectMiddleware,
     CORSMiddleware,
     allow_origins=["*"],
     allow_credentials=True,
@@ -147,10 +150,23 @@ async def stop_attack(attack_id: str):
 @app.websocket("/stats")
 async def stats_websocket(websocket: WebSocket):
     await websocket.accept()
-    while True:
-        await websocket.send_json(manager.stats)
-        await asyncio.sleep(1)
+    try:
+        while True:
+            try:
+                await websocket.send_json(manager.stats)
+                await asyncio.sleep(1)
+
+                data = await asyncio.wait_for(websocket.receive_text(), timeout=0.5)
+            except asyncio.TimeoutError:
+                continue
+            except WebSocketDisconnect:
+                logger.info("Client disconnected")
+                break
+    except Exception as e:
+        logger.error(f"Websocket error: {str(e)}")
+    finally:
+        await websocket.close()
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8000, ws="websockets", log_level="info")
