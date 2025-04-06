@@ -1,5 +1,11 @@
 fastapi
 uvicorn[standard]
-aiohttp
-fake-useragent
-websockets==12.0
+sockets
+requests
+time
+os
+pydantic
+python-multipart
+logging
+gunicorn
+multiprocessing
