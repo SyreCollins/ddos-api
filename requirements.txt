@@ -2,7 +2,6 @@ fastapi
 uvicorn[standard]
 sockets
 requests
-time
 os
 pydantic
 python-multipart
