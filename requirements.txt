@@ -6,4 +6,3 @@ pydantic
 python-multipart
 logging
 gunicorn
-multiprocessing
