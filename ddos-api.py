@@ -9,6 +9,8 @@ from pydantic import BaseModel
 from typing import Optional
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.middleware.cors import CORSMiddleware
+from datetime import datetime
+import json
 
 # Setup logging
 logging.basicConfig(level=logging.INFO)
@@ -46,14 +48,21 @@ class AttackStats(BaseModel):
     connections_open: int
     bytes_sent: int
     errors: int
+    start_time: datetime
+    complete: bool
 
 # Helper functions
 def authenticate(credentials: HTTPAuthorizationCredentials = Depends(security)) -> bool:
     # Replace with your actual authentication logic
     token = credentials.credentials
-    if token == "os.getenv(API_SECRET_KEY)":
+    if token == os.getenv("API_SECRET_KEY"):
         return True
     return False
+
+# Health check endpoint
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "message": "Service is running"}
 
 # Attack implementations
 def http_flood(target_url: str, duration: int, intensity: int, concurrent_connections: int):
@@ -159,7 +168,7 @@ async def start_attack(config: AttackConfig):
     process = multiprocessing.Process(target=execute_attack, args=(config,))
     process.start()
     attack_processes[attack_id] = process
-    attack_stats[attack_id] = {"requests_sent": 0, "connections_open": 0, "bytes_sent": 0, "errors": 0}
+    attack_stats[attack_id] = AttackStats(requests_sent=0, connections_open=0, bytes_sent=0, errors=0, start_time=datetime.now(), complete=False)
     attack_logs[attack_id] = []
     logger.info(f"Started attack {attack_id} with config {config}")
     return {"attack_id": attack_id}
@@ -170,6 +179,7 @@ async def stop_attack(attack_id: str):
         attack_processes[attack_id].terminate()
         del attack_processes[attack_id]
         logger.info(f"Stopped attack {attack_id}")
+        attack_stats[attack_id].complete = True
         return {"status": "stopped"}
     else:
         raise HTTPException(status_code=404, detail="Attack not found")
@@ -183,6 +193,13 @@ async def get_logs(attack_id: str):
 
 @app.get("/api/attack/{attack_id}/stats", dependencies=[Depends(authenticate)])
 async def get_stats(attack_id: str):
+    if attack_id in attack_stats:
+        return {"stats": attack_stats[attack_id]}
+    else:
+        raise HTTPException(status_code=404, detail="Attack not found")
+
+@app.get("/api/attack/{attack_id}/stats/realtime", dependencies=[Depends(authenticate)])
+async def get_realtime_stats(attack_id: str):
     if attack_id in attack_stats:
         return {"stats": attack_stats[attack_id]}
     else:
