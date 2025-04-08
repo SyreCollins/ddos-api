@@ -54,7 +54,7 @@ class AttackStats(BaseModel):
 # Helper functions
 def authenticate(credentials: HTTPAuthorizationCredentials = Depends(security)) -> bool:
     # Replace with your actual authentication logic
-    token = credentials.credentials
+    token = "os.getenv(API_SECRET_KEY)"
     if token == os.getenv("API_SECRET_KEY"):
         return True
     return False
