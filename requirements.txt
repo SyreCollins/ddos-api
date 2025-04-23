@@ -1,8 +1,4 @@
-fastapi
-uvicorn[standard]
-sockets
-requests
-pydantic
-python-multipart
-logging
-gunicorn
+python-telegram-bot
+supabase
+dnspython
+plotly
