@@ -1,4 +1,5 @@
-python-telegram-bot
-supabase
-dnspython
-plotly
+fastapi
+uvicorn[standard]
+requests
+sockets
+python-multipart
