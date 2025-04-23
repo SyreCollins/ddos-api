@@ -9,7 +9,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, validator
 from typing import Dict, Any
 
-from ddos import execute_attack
+from .ddos import execute_attack
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
