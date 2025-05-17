@@ -2,14 +2,14 @@ import os
 import logging
 import multiprocessing
 import statistics
+import asyncio
 from datetime import datetime, timedelta
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, validator
 from typing import Dict, Any
-
-from my_project.ddos import execute_attack
+import uvicorn
+from ddos import execute_attack
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -26,19 +26,10 @@ manager = multiprocessing.Manager()
 attack_processes: Dict[str, multiprocessing.Process] = {}
 attack_stats = manager.dict()
 attack_logs = manager.dict()
-rate_limits: Dict[str, list] = {}  # IP -> list of datetime timestamps
+rate_limits: Dict[str, list] = {}
 
-RATE_LIMIT = 10  # max 10 attack requests per IP
+RATE_LIMIT = 10
 RATE_WINDOW = timedelta(minutes=1)
-
-# Header-based verification
-@app.middleware("http")
-async def verify_frontend_key(request: Request, call_next):
-    expected_key = os.getenv("FRONTEND_KEY")
-    incoming_key = request.headers.get("x-frontend-key")
-    if expected_key and incoming_key != expected_key:
-        return JSONResponse(status_code=403, content={"detail": "Forbidden: Invalid or missing frontend key."})
-    return await call_next(request)
 
 class AttackConfig(BaseModel):
     target_url: str
@@ -73,20 +64,29 @@ class AttackStats(BaseModel):
     connection_metrics: dict = {}
     request_performance: dict = {}
 
+    # enhanced fields
+    min_latency: float = None
+    max_latency: float = None
+    avg_latency: float = None
+    median_latency: float = None
+    p50: float = None
+    p90: float = None
+    p95: float = None
+
     def to_dict(self) -> Dict[str, Any]:
         base = self.dict()
-        latencies = base.get('latency_samples', []) or []
-        min_latency = min(latencies) if latencies else None
-        max_latency = max(latencies) if latencies else None
-        avg_latency = statistics.mean(latencies) if latencies else None
-        median_latency = statistics.median(latencies) if latencies else None
-        base.update({
-            'start_time': self.start_time.isoformat() if self.start_time else None,
-            'min_latency': min_latency,
-            'max_latency': max_latency,
-            'avg_latency': avg_latency,
-            'median_latency': median_latency
-        })
+        latencies = base.get('latency_samples') or []
+        if latencies:
+            base['min_latency'] = min(latencies)
+            base['max_latency'] = max(latencies)
+            base['avg_latency'] = statistics.mean(latencies)
+            base['median_latency'] = statistics.median(latencies)
+            qs = statistics.quantiles(latencies, n=100)
+            base['p50'] = qs[49]
+            base['p90'] = qs[89]
+            base['p95'] = qs[94]
+        if self.start_time:
+            base['start_time'] = self.start_time.isoformat()
         return base
 
 @app.get("/health")
@@ -97,38 +97,47 @@ async def health_check():
 async def start_attack(config: AttackConfig, request: Request):
     ip = request.client.host
     now = datetime.utcnow()
-    request_times = rate_limits.setdefault(ip, [])
-    request_times = [t for t in request_times if now - t < RATE_WINDOW]
-
-    if len(request_times) >= RATE_LIMIT:
-        raise HTTPException(status_code=429, detail="Rate limit exceeded. Try again later.")
-
-    request_times.append(now)
-    rate_limits[ip] = request_times
+    times = rate_limits.setdefault(ip, [])
+    times = [t for t in times if now - t < RATE_WINDOW]
+    if len(times) >= RATE_LIMIT:
+        raise HTTPException(status_code=429, detail="Rate limit exceeded.")
+    times.append(now)
+    rate_limits[ip] = times
 
     attack_id = str(len(attack_processes) + 1)
+    # initialize stats
     attack_stats[attack_id] = manager.dict({
-        "requests_sent": 0,
-        "errors": 0,
-        "bytes_sent": 0,
-        "complete": False,
-        "start_time": now.isoformat(),
-        "latency_samples": manager.list(),
-        "http_status_codes": manager.dict(),
-        "timeout_count": 0,
-        "bandwidth": manager.dict({"total_data_transferred": 0, "peak_download": 0, "download_history": manager.list()}),
-        "connection_metrics": manager.dict({"attempts": 0, "successes": 0, "active_connections": 0, "lifetimes": manager.list()}),
-        "request_performance": manager.dict()
+        'requests_sent': 0,
+        'connections_open': 0,
+        'bytes_sent': 0,
+        'errors': 0,
+        'start_time': now,
+        'complete': False,
+        'latency_samples': manager.list(),
+        'http_status_codes': manager.dict(),
+        'timeout_count': 0,
+        'bandwidth': manager.dict({
+            'total_data_transferred': 0,
+            'peak_download': 0,
+            'download_history': manager.list()
+        }),
+        'connection_metrics': manager.dict({
+            'attempts': 0,
+            'successes': 0,
+            'active_connections': 0,
+            'lifetimes': manager.list()
+        }),
+        'request_performance': manager.dict()
     })
     attack_logs[attack_id] = manager.list()
 
-    process = multiprocessing.Process(
+    proc = multiprocessing.Process(
         target=execute_attack,
         args=(config, attack_stats[attack_id], attack_logs[attack_id]),
     )
-    process.start()
-    attack_processes[attack_id] = process
-    logger.info(f"Started attack {attack_id} from {ip} with config {config}")
+    proc.start()
+    attack_processes[attack_id] = proc
+    logger.info(f"Started attack {attack_id} from {ip}")
     return {"attack_id": attack_id}
 
 @app.get("/api/attack/{attack_id}/stop")
@@ -138,7 +147,7 @@ async def stop_attack(attack_id: str):
         proc.terminate()
         proc.join(timeout=5)
         if attack_id in attack_stats:
-            attack_stats[attack_id]["complete"] = True
+            attack_stats[attack_id]['complete'] = True
         logger.info(f"Stopped attack {attack_id}")
         return {"status": "stopped"}
     raise HTTPException(status_code=404, detail="Attack not found")
@@ -152,14 +161,25 @@ async def get_logs(attack_id: str):
 @app.get("/api/attack/{attack_id}/stats")
 async def get_stats(attack_id: str):
     if attack_id in attack_stats:
-        return {"stats": dict(attack_stats[attack_id])}
+        raw = attack_stats[attack_id]
+        stats = AttackStats(**{**raw, 'start_time': raw['start_time']})
+        return {"stats": stats.to_dict()}
     raise HTTPException(status_code=404, detail="Attack not found")
 
-@app.get("/api/attack/{attack_id}/stats/realtime")
-async def get_realtime_stats(attack_id: str):
-    if attack_id in attack_stats:
-        return {"stats": dict(attack_stats[attack_id])}
-    raise HTTPException(status_code=404, detail="Attack not found")
+@app.websocket("/ws/attack/{attack_id}")
+async def attack_ws(ws: WebSocket, attack_id: str):
+    await ws.accept()
+    try:
+        while True:
+            if attack_id not in attack_stats:
+                await ws.close(code=1008)
+                return
+            raw = attack_stats[attack_id]
+            stats = AttackStats(**{**raw, 'start_time': raw['start_time']})
+            await ws.send_json(stats.to_dict())
+            await asyncio.sleep(1)
+    except WebSocketDisconnect:
+        pass
 
 @app.on_event("shutdown")
 def shutdown_cleanup():
@@ -170,5 +190,4 @@ def shutdown_cleanup():
     attack_processes.clear()
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv('PORT', 8000)))
