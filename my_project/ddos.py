@@ -20,18 +20,44 @@ def update_request_performance(shared_stats: dict, elapsed_time: float):
     try:
         sent = shared_stats.get('requests_sent', 0)
         errors = shared_stats.get('errors', 0)
+        latencies = shared_stats.get('latency_samples', [])
+        # Basic throughput
         rps = sent / elapsed_time if elapsed_time > 0 else 0
         perf = shared_stats.setdefault('request_performance', {})
         perf['requests_per_second'] = rps
         perf['success_failure_ratio'] = ((sent - errors) / sent) if sent else None
-        if latencies := shared_stats.get('latency_samples', []):
+        perf['error_rate'] = errors / sent if sent else 0
+        # Latency stats
+        if latencies:
             perf['latency_min'] = min(latencies)
             perf['latency_avg'] = statistics.mean(latencies)
             perf['latency_max'] = max(latencies)
-        perf['error_rate'] = errors / sent if sent else 0
+            for pct in (50, 90, 95):
+                perf[f'p{pct}'] = statistics.quantiles(latencies, n=100)[pct-1]
     except Exception:
         pass
 
+def gather_security_checks(target_url: str, shared_stats: dict):
+    try:
+        # GET headers
+        resp = requests.get(target_url, timeout=5)
+        headers = resp.headers
+        sec = {}
+        sec['hsts'] = 'strict-transport-security' in headers
+        sec['csp'] = 'content-security-policy' in headers
+        sec['xfo'] = 'x-frame-options' in headers
+        # TLS expiry
+        host, _ = extract_host(target_url, default_port=443)
+        ctx = ssl.create_default_context()
+        with ctx.wrap_socket(socket.socket(), server_hostname=host) as ss:
+            ss.settimeout(5)
+            ss.connect((host, 443))
+            cert = ss.getpeercert()
+            expiry = datetime.strptime(cert['notAfter'], '%b %d %H:%M:%S %Y %Z')
+            sec['tls_expiry'] = expiry.isoformat()
+        shared_stats['security_checks'] = sec
+    except Exception as e:
+        shared_stats.setdefault('security_checks_errors', []).append(str(e))
 
 def http_flood(target_url: str, duration: int, intensity: int, concurrent_connections: int,
                shared_stats: dict, shared_logs: list):
@@ -223,9 +249,23 @@ def mixed(target_url: str, duration: int, intensity: int, concurrent_connections
 
     for key, stats in sub_stats.items():
         shared_stats[key] = stats
+    
+    gather_security_checks(target_url, shared_stats)
 
 
 def execute_attack(config, shared_stats: dict, shared_logs: list):
+    shared_stats['start_time'] = datetime.utcnow().isoformat()
+    fn = {...}[config.attack_type]
+    try:
+        fn(config.target_url, config.duration, config.intensity, config.concurrent_connections,
+           shared_stats, shared_logs)
+    except Exception as e:
+        shared_logs.append(f"{datetime.utcnow().isoformat()} Execution error: {e}")
+    # final security checks and mark complete
+    gather_security_checks(config.target_url, shared_stats)
+    shared_stats['complete'] = True
+
+"""def execute_attack(config, shared_stats: dict, shared_logs: list):
     shared_stats['start_time'] = datetime.now().isoformat()
     fn = {
         'http_flood': http_flood,
@@ -242,3 +282,4 @@ def execute_attack(config, shared_stats: dict, shared_logs: list):
     except Exception as e:
         shared_logs.append(f"{datetime.now().isoformat()} Execution error: {e}")
     shared_stats['complete'] = True
+"""
