@@ -255,7 +255,14 @@ def mixed(target_url: str, duration: int, intensity: int, concurrent_connections
 
 def execute_attack(config, shared_stats: dict, shared_logs: list):
     shared_stats['start_time'] = datetime.utcnow().isoformat()
-    fn = {...}[config.attack_type]
+    fn = {
+        'http_flood': http_flood,
+        'slowloris': slowloris,
+        'tcp_exhaustion': tcp_exhaustion,
+        'volumetric': volumetric,
+        'tls_handshake': tls_handshake_flood,
+        'mixed': mixed
+    }.get(config.attack_type, http_flood)
     try:
         fn(config.target_url, config.duration, config.intensity, config.concurrent_connections,
            shared_stats, shared_logs)
