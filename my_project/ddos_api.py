@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, validator
 from typing import Dict, Any
 import uvicorn
-from ddos import execute_attack
+from .ddos import execute_attack
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
